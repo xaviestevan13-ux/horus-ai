@@ -1,0 +1,7 @@
+{
+  "name": "HP Horus AI",
+  "description": "Advanced AI-powered diagnostic tool for HP laptops and SitePrint robots. Detect external damage, screen issues, and keyboard clogs using computer vision.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
