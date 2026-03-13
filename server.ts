@@ -1,29 +1,27 @@
-const express = require("express");
-const path = require("path");
+import express, { Request, Response } from 'express';
+import path from 'path';
 
-async function startServer() {
-  const app = express();
-  const PORT = process.env.PORT || 8080;
+const app = express();
+const PORT = process.env.PORT || 8080;
 
-  app.use(express.json());
+app.use(express.json());
 
-  // Localizamos la carpeta dist de forma absoluta
-  const distPath = path.resolve(__dirname, "dist");
+// La carpeta 'dist' es donde Vite guarda la web construida
+const distPath = path.resolve(process.cwd(), 'dist');
 
-  // Servimos los archivos estáticos
-  app.use(express.static(distPath));
+// Servir archivos estáticos
+app.use(express.static(distPath));
 
-  // Ruta de salud para Google Cloud
-  app.get("/health", (req, res) => res.send("OK"));
+// Ruta de salud
+app.get('/health', (_req: Request, res: Response) => {
+  res.send('OK');
+});
 
-  // Todo lo demás sirve el index.html
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(distPath, "index.html"));
-  });
+// Captura todas las demás rutas y sirve el index.html
+app.get('*', (_req: Request, res: Response) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log("Servidor Horus AI operando en puerto " + PORT);
-  });
-}
-
-startServer().catch((err) => console.error(err));
+app.listen(Number(PORT), '0.0.0.0', () => {
+  console.log(`Servidor escuchando en puerto ${PORT}`);
+});
