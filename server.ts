@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -8,33 +7,39 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  // Google Cloud Run requiere el puerto 8080 por defecto
+  
+  // Google Cloud Run usa el puerto 8080 por defecto
   const PORT = process.env.PORT || "8080";
 
   app.use(express.json());
 
-  const isProduction = process.env.NODE_ENV === "production";
-  const distPath = path.join(process.cwd(), 'dist');
- 
-  if (isProduction) {
-    // En producción, servimos los archivos estáticos de la carpeta 'dist'
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  } else {
-    // En desarrollo, usamos el middleware de Vite
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  }
+  // Definimos la ruta de la carpeta 'dist' de forma absoluta
+  const distPath = path.resolve(process.cwd(), 'dist');
 
-  // Escuchar en 0.0.0.0 es obligatorio para despliegues en la nube
+  // 1. Servir archivos estáticos (js, css, imágenes)
+  app.use(express.static(distPath));
+
+  // 2. Ruta para la API (si tienes alguna en el futuro la pones aquí)
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  // 3. CUALQUIER otra ruta sirve el index.html (Vital para aplicaciones SPA)
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'), (err) => {
+      if (err) {
+        res.status(500).send("Error: La carpeta 'dist' o el 'index.html' no existen en el servidor.");
+      }
+    });
+  });
+
+  // Escuchar en 0.0.0.0 (obligatorio para Docker/Cloud Run)
   app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`Servidor listo en puerto ${PORT}`);
+    console.log(`🚀 Horus AI funcionando en el puerto ${PORT}`);
+    console.log(`📁 Buscando archivos en: ${distPath}`);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("Error al arrancar el servidor:", err);
+});
