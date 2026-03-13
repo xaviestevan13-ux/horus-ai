@@ -172,7 +172,7 @@ class ErrorBoundary extends Component<any, any> {
       } catch (e) {}
 
       return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+        <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
           <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-200 max-w-md w-full text-center space-y-6">
             <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto">
               <AlertCircle className="w-10 h-10 text-red-600" />
@@ -427,7 +427,7 @@ export default function App() {
             name: firebaseUser.displayName || 'User',
             country: 'United States',
             role: 'user'
-          });
+            });
         } else {
           setUser(null);
         }
@@ -435,7 +435,16 @@ export default function App() {
         setIsAuthReady(true);
       }
     });
-    return () => unsubscribe();
+
+    // Safety timeout: force ready state after 8 seconds if Firebase is slow
+    const timeout = setTimeout(() => {
+      setIsAuthReady(true);
+    }, 8000);
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timeout);
+    };
   }, []);
 
   const currency = user?.country ? (CURRENCY_CONFIG[user.country] || DEFAULT_CURRENCY) : DEFAULT_CURRENCY;
@@ -1677,10 +1686,19 @@ export default function App() {
 
   if (!isAuthReady) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-12 h-12 text-[#0050d3] animate-spin" />
-          <p className="text-slate-400 font-medium animate-pulse">Loading HP Horus AI...</p>
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="flex flex-col items-center gap-6 max-w-sm w-full text-center">
+          <div className="w-16 h-16 border-4 border-hp-blue border-t-transparent rounded-full animate-spin"></div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-hp-dark">Loading HP Horus AI</h2>
+            <p className="text-slate-500">Preparing your diagnostic dashboard...</p>
+          </div>
+          <button 
+            onClick={() => setIsAuthReady(true)}
+            className="mt-4 text-xs text-slate-400 hover:text-hp-blue transition-colors underline underline-offset-4"
+          >
+            Taking too long? Force enter
+          </button>
         </div>
       </div>
     );
