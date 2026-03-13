@@ -393,20 +393,34 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // Fetch additional user data from Firestore
-        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          setUser({
-            id: firebaseUser.uid as any, // Keep as any to avoid type issues with existing code
-            email: firebaseUser.email || '',
-            name: userData.name || firebaseUser.displayName || 'User',
-            country: userData.country || 'United States',
-            role: userData.role || 'user'
-          });
+      try {
+        if (firebaseUser) {
+          // Fetch additional user data from Firestore
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            setUser({
+              id: firebaseUser.uid as any,
+              email: firebaseUser.email || '',
+              name: userData.name || firebaseUser.displayName || 'User',
+              country: userData.country || 'United States',
+              role: userData.role || 'user'
+            });
+          } else {
+            setUser({
+              id: firebaseUser.uid as any,
+              email: firebaseUser.email || '',
+              name: firebaseUser.displayName || 'User',
+              country: 'United States',
+              role: 'user'
+            });
+          }
         } else {
-          // Fallback if doc doesn't exist yet
+          setUser(null);
+        }
+      } catch (error) {
+        console.error("Auth state change error:", error);
+        if (firebaseUser) {
           setUser({
             id: firebaseUser.uid as any,
             email: firebaseUser.email || '',
@@ -414,11 +428,12 @@ export default function App() {
             country: 'United States',
             role: 'user'
           });
+        } else {
+          setUser(null);
         }
-      } else {
-        setUser(null);
+      } finally {
+        setIsAuthReady(true);
       }
-      setIsAuthReady(true);
     });
     return () => unsubscribe();
   }, []);
@@ -1662,15 +1677,18 @@ export default function App() {
 
   if (!isAuthReady) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <Loader2 className="w-12 h-12 text-hp-blue animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-12 h-12 text-[#0050d3] animate-spin" />
+          <p className="text-slate-400 font-medium animate-pulse">Loading HP Horus AI...</p>
+        </div>
       </div>
     );
   }
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen flex flex-col font-sans transition-colors duration-300 bg-slate-50">
+      <div className="min-h-screen flex flex-col font-sans transition-colors duration-300 bg-white">
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50 relative overflow-hidden">
         <div className="absolute inset-0 hp-diagonal-bars opacity-5 pointer-events-none" />
