@@ -1706,10 +1706,9 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen flex flex-col font-sans transition-colors duration-300 bg-white">
+      <div className="min-h-screen flex flex-col font-sans transition-colors duration-300 bg-white relative z-0">
       {/* Header */}
-      <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50 relative overflow-hidden">
-        <div className="absolute inset-0 hp-diagonal-bars opacity-5 pointer-events-none" />
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-50 relative">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between relative z-10">
           <div className="flex items-center gap-3 cursor-pointer" onClick={reset}>
             <img src={HP_LOGO} alt="HP Logo" className="h-8 w-8" referrerPolicy="no-referrer" />
@@ -3032,7 +3031,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <footer className="bg-slate-900 text-white py-16 relative overflow-hidden hp-diagonal-bars">
+      <footer className="bg-slate-900 text-white py-16 relative overflow-hidden">
         <div className="max-w-7xl mx-auto px-6 sm:px-8 text-center space-y-8 relative z-10">
           <img src={HP_LOGO} alt="HP Logo" className="h-10 w-10 mx-auto" referrerPolicy="no-referrer" />
           <div className="flex justify-center gap-12 text-sm font-bold text-slate-400 uppercase tracking-widest">

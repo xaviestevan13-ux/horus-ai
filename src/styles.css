@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --color-hp-blue: #0050d3;
+  --color-hp-dark: #000000;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html, body {
+    @apply bg-white text-hp-dark antialiased;
+    background-color: #ffffff !important;
+  }
+}
+
+.glass-card {
+  @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-xl;
+}

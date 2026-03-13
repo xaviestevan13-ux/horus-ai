@@ -1,7 +1,7 @@
 import {StrictMode, Component, ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
-import './index.css';
+import './styles.css';
 import { AlertCircle } from 'lucide-react';
 
 class ErrorBoundary extends Component<any, any> {
