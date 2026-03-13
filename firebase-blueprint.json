@@ -1,0 +1,78 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "country": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "technician"] }
+      },
+      "required": ["uid", "email", "name"]
+    },
+    "Inspection": {
+      "title": "Inspection",
+      "description": "Laptop or SitePrint inspection record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "model": { "type": "string" },
+        "inspectionType": { "type": "string", "enum": ["laptop", "siteprint"] },
+        "date": { "type": "string", "format": "date-time" },
+        "results": { "type": "object" },
+        "summary": { "type": "string" },
+        "overallHealth": { "type": "string" },
+        "country": { "type": "string" }
+      },
+      "required": ["userId", "model", "results", "summary", "overallHealth"]
+    },
+    "Device": {
+      "title": "Device",
+      "description": "Registered device in fleet",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "model": { "type": "string" },
+        "serialNumber": { "type": "string" },
+        "purchaseDate": { "type": "string" },
+        "deviceType": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["userId", "model", "deviceType"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "Feedback on AI analysis",
+      "type": "object",
+      "properties": {
+        "inspectionId": { "type": "string" },
+        "userId": { "type": "string" },
+        "isCorrect": { "type": "boolean" },
+        "comment": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["inspectionId", "isCorrect"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/inspections/{inspectionId}": {
+      "schema": "Inspection",
+      "description": "Inspection records"
+    },
+    "/devices/{deviceId}": {
+      "schema": "Device",
+      "description": "Fleet devices"
+    },
+    "/feedback/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "AI feedback"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, Component, ReactNode, ErrorInfo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import { 
@@ -69,6 +69,130 @@ import {
   type AnalysisResult, 
   type SitePrintAnalysisResult 
 } from './services/geminiService';
+import { auth, db } from './firebase';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut,
+  updateProfile,
+  sendPasswordResetEmail
+} from 'firebase/auth';
+import { 
+  collection, 
+  addDoc, 
+  getDocs, 
+  query, 
+  where, 
+  orderBy, 
+  deleteDoc, 
+  doc, 
+  limit,
+  setDoc,
+  getDoc,
+  serverTimestamp
+} from 'firebase/firestore';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+class ErrorBoundary extends Component<any, any> {
+  state: any;
+  props: any;
+
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let message = "Something went wrong.";
+      try {
+        const parsed = JSON.parse(this.state.error?.message || "");
+        if (parsed.error && parsed.error.includes("insufficient permissions")) {
+          message = "You don't have permission to perform this action. Please check your account type.";
+        }
+      } catch (e) {}
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+          <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-200 max-w-md w-full text-center space-y-6">
+            <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto">
+              <AlertCircle className="w-10 h-10 text-red-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-hp-dark">Application Error</h2>
+            <p className="text-slate-600">{message}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-3 bg-hp-blue text-white rounded-full font-bold hover:bg-hp-blue/90 transition-all"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -248,9 +372,11 @@ export default function App() {
   const [isChatLoading, setIsChatLoading] = useState(false);
 
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'forgot'>('login');
   const [authForm, setAuthForm] = useState({ email: '', password: '', name: '', country: 'United States' });
   const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const [technicianStats, setTechnicianStats] = useState<(AnalysisResult & { model: string, country: string })[]>([]);
   const [isStatsLoading, setIsStatsLoading] = useState(false);
 
@@ -262,15 +388,40 @@ export default function App() {
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const [feedbackComment, setFeedbackComment] = useState('');
 
-  const [user, setUser] = useState<UserProfile | null>(() => {
-    try {
-      const saved = localStorage.getItem('hp_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch (e) {
-      console.error("Failed to parse user from localStorage", e);
-      return null;
-    }
-  });
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Fetch additional user data from Firestore
+        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setUser({
+            id: firebaseUser.uid as any, // Keep as any to avoid type issues with existing code
+            email: firebaseUser.email || '',
+            name: userData.name || firebaseUser.displayName || 'User',
+            country: userData.country || 'United States',
+            role: userData.role || 'user'
+          });
+        } else {
+          // Fallback if doc doesn't exist yet
+          setUser({
+            id: firebaseUser.uid as any,
+            email: firebaseUser.email || '',
+            name: firebaseUser.displayName || 'User',
+            country: 'United States',
+            role: 'user'
+          });
+        }
+      } else {
+        setUser(null);
+      }
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
 
   const currency = user?.country ? (CURRENCY_CONFIG[user.country] || DEFAULT_CURRENCY) : DEFAULT_CURRENCY;
 
@@ -352,20 +503,30 @@ export default function App() {
   const fetchProfileData = async () => {
     if (!user) return;
     try {
-      const [inspRes, devRes] = await Promise.all([
-        fetch(`/api/inspections/${user.id}`),
-        fetch(`/api/devices/${user.id}`)
-      ]);
-      
-      if (inspRes.ok) {
-        const inspections = await inspRes.json();
-        setPastInspections(inspections);
-      }
-      
-      if (devRes.ok) {
-        const devices = await devRes.json();
-        setManuallyRegisteredDevices(devices);
-      }
+      // Fetch inspections
+      const qInsp = query(
+        collection(db, 'inspections'),
+        where('userId', '==', user.id),
+        orderBy('date', 'desc')
+      );
+      const inspSnap = await getDocs(qInsp);
+      const inspections = inspSnap.docs.map(doc => ({
+        id: doc.id as any,
+        ...doc.data()
+      })) as any[];
+      setPastInspections(inspections);
+
+      // Fetch devices
+      const qDev = query(
+        collection(db, 'devices'),
+        where('userId', '==', user.id)
+      );
+      const devSnap = await getDocs(qDev);
+      const devices = devSnap.docs.map(doc => ({
+        id: doc.id as any,
+        ...doc.data()
+      })) as any[];
+      setManuallyRegisteredDevices(devices);
     } catch (err) {
       console.error("Failed to fetch profile data", err);
     }
@@ -431,14 +592,13 @@ export default function App() {
       // Fetch recent feedback to learn from
       let feedbackContext = "";
       try {
-        const feedbackRes = await fetch('/api/feedback/recent');
-        if (feedbackRes.ok) {
-          const recentFeedback = await feedbackRes.json();
-          if (recentFeedback.length > 0) {
-            feedbackContext = recentFeedback.map((f: any) => 
-              `- Inspection of ${f.model}: User said it was ${f.is_correct ? "CORRECT" : "INCORRECT"}. ${f.comment ? `Comment: ${f.comment}` : ""}`
-            ).join("\n");
-          }
+        const qFeedback = query(collection(db, 'feedback'), orderBy('date', 'desc'), limit(10));
+        const feedbackSnap = await getDocs(qFeedback);
+        const recentFeedback = feedbackSnap.docs.map(doc => doc.data());
+        if (recentFeedback.length > 0) {
+          feedbackContext = recentFeedback.map((f: any) => 
+            `- Inspection: User said it was ${f.isCorrect ? "CORRECT" : "INCORRECT"}. ${f.comment ? `Comment: ${f.comment}` : ""}`
+          ).join("\n");
         }
       } catch (fErr) {
         console.warn("Failed to fetch feedback context", fErr);
@@ -475,24 +635,23 @@ export default function App() {
       setImages([...updatedImages]);
 
       if (result.isHPProduct && (inspectionMode !== 'laptop' || result.matchesModel)) {
-        // Save to backend
-        const saveRes = await fetch('/api/inspections', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: user?.id || null,
+        // Save to Firestore
+        try {
+          const docRef = await addDoc(collection(db, 'inspections'), {
+            userId: user?.id || 'anonymous',
             model: inspectionMode === 'laptop' ? selectedModel : `HP SitePrint ${result.componentType || 'Component'}`,
             results: result,
             summary: result.summary,
-            overall_health: inspectionMode === 'laptop' ? (result as any).overallHealth : (result as any).condition,
-            inspection_type: inspectionMode
-          })
-        });
-        if (saveRes.ok) {
-          const savedData = await saveRes.json();
-          setLastInspectionId(savedData.id);
+            overallHealth: inspectionMode === 'laptop' ? (result as any).overallHealth : (result as any).condition,
+            inspectionType: inspectionMode,
+            date: new Date().toISOString(),
+            country: user?.country || 'Unknown'
+          });
+          setLastInspectionId(docRef.id as any);
           setShowFeedbackForm(true);
           setFeedbackSubmitted(false);
+        } catch (saveErr) {
+          console.error("Error saving inspection to Firestore:", saveErr);
         }
       }
     } catch (err) {
@@ -511,15 +670,12 @@ export default function App() {
   const submitFeedback = async (isCorrect: boolean) => {
     if (!lastInspectionId) return;
     try {
-      await fetch('/api/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inspection_id: lastInspectionId,
-          user_id: user?.id || null,
-          is_correct: isCorrect,
-          comment: feedbackComment
-        })
+      await addDoc(collection(db, 'feedback'), {
+        inspectionId: lastInspectionId,
+        userId: user?.id || 'anonymous',
+        isCorrect: isCorrect,
+        comment: feedbackComment,
+        date: new Date().toISOString()
       });
       setFeedbackSubmitted(true);
       setShowFeedbackForm(false);
@@ -532,11 +688,10 @@ export default function App() {
   const fetchTechnicianStats = async () => {
     setIsStatsLoading(true);
     try {
-      const res = await fetch('/api/technician/stats');
-      if (res.ok) {
-        const data = await res.json();
-        setTechnicianStats(data);
-      }
+      const q = query(collection(db, 'inspections'), where('inspectionType', '==', 'laptop'));
+      const snap = await getDocs(q);
+      const data = snap.docs.map(doc => doc.data());
+      setTechnicianStats(data as any);
     } catch (err) {
       console.error("Failed to fetch technician stats", err);
     } finally {
@@ -895,29 +1050,85 @@ export default function App() {
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
-    const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/signup';
+    setAuthLoading(true);
+    
+    const email = authForm.email.trim();
+    const password = authForm.password.trim();
+
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(authForm)
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setUser(data);
-        localStorage.setItem('hp_user', JSON.stringify(data));
-        setShowAuthModal(false);
-      } else {
-        setAuthError(data.error || 'Authentication failed');
+      if (authMode === 'forgot') {
+        await sendPasswordResetEmail(auth, email);
+        setResetSent(true);
+        setAuthLoading(false);
+        return;
       }
-    } catch (err) {
-      setAuthError('Server error');
+
+      if (authMode === 'login') {
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        const firebaseUser = userCredential.user;
+        
+        // Repair Firestore doc if it's missing (half-created account recovery)
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (!userDoc.exists()) {
+            const role = (email.endsWith('@hp.com') || email === 'roger.torrents@estudiantat.upc.edu') ? 'technician' : 'user';
+            await setDoc(doc(db, 'users', firebaseUser.uid), {
+              uid: firebaseUser.uid,
+              email: email,
+              name: authForm.name.trim() || firebaseUser.displayName || 'User',
+              country: authForm.country || 'United States',
+              role: role
+            });
+          }
+        } catch (repairErr) {
+          console.warn("Profile repair failed, but continuing login:", repairErr);
+        }
+      } else {
+        console.log("Attempting to register:", email);
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const firebaseUser = userCredential.user;
+        
+        const role = (email.endsWith('@hp.com') || email === 'roger.torrents@estudiantat.upc.edu') ? 'technician' : 'user';
+        
+        // Create user doc in Firestore
+        await setDoc(doc(db, 'users', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          email: email,
+          name: authForm.name.trim(),
+          country: authForm.country,
+          role: role
+        });
+
+        await updateProfile(firebaseUser, { displayName: authForm.name.trim() });
+      }
+      setShowAuthModal(false);
+    } catch (err: any) {
+      console.error("Auth error details:", err.code, err.message);
+      let message = 'Authentication failed';
+      
+      if (err.code === 'auth/email-already-in-use') {
+        message = `The email "${email}" is already registered in your private project. This usually happens if a previous attempt succeeded in creating the account but was interrupted. Please try to "Sign In" instead using the password you chose. If you don't remember it, use the "Forgot Password" link.`;
+      } else if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+        message = 'Invalid email or password. If you forgot your password, use the "Forgot Password" link.';
+      } else if (err.code === 'auth/weak-password') {
+        message = 'Password must be at least 6 characters long.';
+      } else if (err.code === 'auth/invalid-email') {
+        message = 'Please enter a valid email address.';
+      } else if (err.code === 'auth/user-disabled') {
+        message = 'This account has been disabled.';
+      } else {
+        message = `[${err.code}] ${err.message || 'An unexpected error occurred.'}`;
+      }
+      
+      setAuthError(message);
+    } finally {
+      setAuthLoading(false);
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await signOut(auth);
     setUser(null);
-    localStorage.removeItem('hp_user');
     setStep(0);
   };
 
@@ -1235,23 +1446,18 @@ export default function App() {
     if (!user) return;
     
     try {
-      const response = await fetch('/api/devices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: user.id,
-          model: newDevice.model,
-          serial_number: newDevice.serialNumber,
-          purchase_date: newDevice.purchaseDate,
-          device_type: newDevice.type
-        })
+      await addDoc(collection(db, 'devices'), {
+        userId: user.id,
+        model: newDevice.model,
+        serialNumber: newDevice.serialNumber,
+        purchaseDate: newDevice.purchaseDate,
+        deviceType: newDevice.type,
+        status: 'online'
       });
       
-      if (response.ok) {
-        setShowAddDeviceModal(false);
-        setNewDevice({ model: '', serialNumber: '', purchaseDate: '', type: 'laptop' });
-        fetchProfileData();
-      }
+      setShowAddDeviceModal(false);
+      setNewDevice({ model: '', serialNumber: '', purchaseDate: '', type: 'laptop' });
+      fetchProfileData();
     } catch (error) {
       console.error("Error registering device:", error);
     }
@@ -1303,12 +1509,18 @@ export default function App() {
       if (!confirm(`Are you sure you want to remove ${device.name} from your fleet? This will delete all inspection history for this device.`)) return;
       
       try {
-        const response = await fetch(`/api/fleet/${user.id}/${device.name}`, {
-          method: 'DELETE'
-        });
-        if (response.ok) {
-          fetchProfileData();
-        }
+        // Delete device doc
+        const qDev = query(collection(db, 'devices'), where('userId', '==', user.id), where('model', '==', device.name));
+        const devSnap = await getDocs(qDev);
+        const deleteDevPromises = devSnap.docs.map(d => deleteDoc(doc(db, 'devices', d.id)));
+        
+        // Delete related inspections
+        const qInsp = query(collection(db, 'inspections'), where('userId', '==', user.id), where('model', '==', device.name));
+        const inspSnap = await getDocs(qInsp);
+        const deleteInspPromises = inspSnap.docs.map(d => deleteDoc(doc(db, 'inspections', d.id)));
+
+        await Promise.all([...deleteDevPromises, ...deleteInspPromises]);
+        fetchProfileData();
       } catch (error) {
         console.error("Error deleting device:", error);
       }
@@ -1448,8 +1660,17 @@ export default function App() {
   const totalEstimatedValue = combinedResult?.estimatedResaleValue || 0;
   const totalRepairCosts = combinedResult?.totalRepairCost || 0;
 
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="w-12 h-12 text-hp-blue animate-spin" />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex flex-col font-sans transition-colors duration-300 bg-slate-50">
+    <ErrorBoundary>
+      <div className="min-h-screen flex flex-col font-sans transition-colors duration-300 bg-slate-50">
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50 relative overflow-hidden">
         <div className="absolute inset-0 hp-diagonal-bars opacity-5 pointer-events-none" />
@@ -2338,67 +2559,113 @@ export default function App() {
               <div className="p-8 space-y-6">
                 <div className="text-center space-y-2">
                   <img src={HP_LOGO} alt="HP" className="h-10 w-10 mx-auto" referrerPolicy="no-referrer" />
-                  <h3 className="text-2xl font-bold">{authMode === 'login' ? 'Welcome Back' : 'Join HP Horus AI'}</h3>
-                  <p className="text-slate-500 text-sm">Access personalized diagnostics and history.</p>
+                  <h3 className="text-2xl font-bold">
+                    {authMode === 'login' ? 'Welcome Back' : authMode === 'signup' ? 'Join HP Horus AI' : 'Reset Password'}
+                  </h3>
+                  <p className="text-slate-500 text-sm">
+                    {authMode === 'login' ? 'Access personalized diagnostics and history.' : 
+                     authMode === 'signup' ? 'Join the HP Large Format support team.' : 
+                     'Enter your email to receive a reset link.'}
+                  </p>
                 </div>
 
-                <form onSubmit={handleAuth} className="space-y-4">
-                  {authMode === 'signup' && (
-                    <>
+                {resetSent ? (
+                  <div className="text-center space-y-6">
+                    <div className="p-4 bg-emerald-50 text-emerald-700 rounded-2xl border border-emerald-100">
+                      Password reset link sent! Please check your inbox.
+                    </div>
+                    <button 
+                      onClick={() => { setResetSent(false); setAuthMode('login'); }}
+                      className="text-hp-blue font-bold hover:underline"
+                    >
+                      Back to Login
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleAuth} className="space-y-4">
+                    {authMode === 'signup' && (
+                      <>
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Full Name</label>
+                          <input 
+                            required type="text" 
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-hp-blue outline-none transition-all"
+                            value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Country</label>
+                          <select 
+                            required
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-hp-blue outline-none transition-all"
+                            value={authForm.country} onChange={e => setAuthForm({...authForm, country: e.target.value})}
+                          >
+                            {["United States", "United Kingdom", "Canada", "Australia", "Germany", "France", "Spain", "Italy", "Japan", "China", "India", "Brazil", "Mexico", "Norway", "Sweden", "Finland", "Iceland"].map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    )}
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Email Address</label>
+                      <input 
+                        required type="email" 
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-hp-blue outline-none transition-all"
+                        value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})}
+                      />
+                    </div>
+                    
+                    {authMode !== 'forgot' && (
                       <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-500 uppercase">Full Name</label>
+                        <div className="flex justify-between items-center">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Password</label>
+                          {authMode === 'login' && (
+                            <button 
+                              type="button"
+                              onClick={() => setAuthMode('forgot')}
+                              className="text-xs text-hp-blue font-bold hover:underline"
+                            >
+                              Forgot?
+                            </button>
+                          )}
+                        </div>
                         <input 
-                          required type="text" 
+                          required type="password" 
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-hp-blue outline-none transition-all"
-                          value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})}
+                          value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}
                         />
                       </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-500 uppercase">Country</label>
-                        <select 
-                          required
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-hp-blue outline-none transition-all"
-                          value={authForm.country} onChange={e => setAuthForm({...authForm, country: e.target.value})}
-                        >
-                          {["United States", "United Kingdom", "Canada", "Australia", "Germany", "France", "Spain", "Italy", "Japan", "China", "India", "Brazil", "Mexico", "Norway", "Sweden", "Finland", "Iceland"].map(c => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  )}
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-500 uppercase">Email Address</label>
-                    <input 
-                      required type="email" 
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-hp-blue outline-none transition-all"
-                      value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})}
-                    />
+                    )}
+
+                    {authError && <p className="text-sm text-red-500 font-medium">{authError}</p>}
+
+                    <button 
+                      disabled={authLoading}
+                      className="w-full py-4 bg-hp-blue text-white rounded-xl font-bold shadow-lg shadow-hp-blue/20 hover:bg-hp-blue/90 transition-all flex items-center justify-center gap-2 disabled:opacity-70"
+                    >
+                      {authLoading ? (
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        authMode === 'login' ? 'Sign In' : authMode === 'signup' ? 'Create Account' : 'Send Reset Link'
+                      )}
+                    </button>
+                  </form>
+                )}
+
+                {!resetSent && (
+                  <div className="text-center">
+                    <button 
+                      onClick={() => {
+                        setAuthMode(authMode === 'login' ? 'signup' : 'login');
+                        setAuthError('');
+                      }}
+                      className="text-sm font-bold text-hp-blue hover:underline"
+                    >
+                      {authMode === 'login' ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
+                    </button>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-500 uppercase">Password</label>
-                    <input 
-                      required type="password" 
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-hp-blue outline-none transition-all"
-                      value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}
-                    />
-                  </div>
-
-                  {authError && <p className="text-sm text-red-500 font-medium">{authError}</p>}
-
-                  <button className="w-full py-4 bg-hp-blue text-white rounded-xl font-bold shadow-lg shadow-hp-blue/20 hover:bg-hp-blue/90 transition-all">
-                    {authMode === 'login' ? 'Sign In' : 'Create Account'}
-                  </button>
-                </form>
-
-                <div className="text-center">
-                  <button 
-                    onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
-                    className="text-sm font-bold text-hp-blue hover:underline"
-                  >
-                    {authMode === 'login' ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
-                  </button>
-                </div>
+                )}
               </div>
             </motion.div>
           </div>
@@ -2746,5 +3013,6 @@ export default function App() {
         </div>
       </footer>
     </div>
+    </ErrorBoundary>
   );
 }
